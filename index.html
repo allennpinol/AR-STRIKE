@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR Bowling: Pro Classic Edition</title>
+    
+    <!-- External Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800;900&display=swap');
+        
+        :root { 
+            --primary: #8b5cf6; 
+            --secondary: #06b6d4; 
+            --accent: #10b981; 
+            --bg-dark: #0f172a; 
+            --glass-bg: rgba(15, 23, 42, 0.75);
+        }
+
+        body { 
+            font-family: 'Outfit', sans-serif; 
+            background: #0d121c;
+            color: white; overflow: hidden; margin: 0; height: 100vh; width: 100vw;
+        }
+
+        .glass { 
+            background: var(--glass-bg); backdrop-filter: blur(12px); 
+            border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 0 30px rgba(0,0,0,0.5); border-radius: 1rem;
+        }
+
+        .neon-text { text-shadow: 0 0 10px var(--secondary), 0 0 20px var(--secondary); }
+        
+        .screen { 
+            display: none; width: 100%; height: 100vh; 
+            flex-direction: column; box-sizing: border-box; 
+            position: absolute; top: 0; left: 0; z-index: 10;
+        }
+        .screen.active { display: flex; animation: fadeIn 0.3s ease-out; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ThreeJS Canvas */
+        #three-canvas {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1; opacity: 0; pointer-events: none; transition: opacity 0.5s ease;
+        }
+        #three-canvas.active { opacity: 1; }
+
+        /* Track Pad Monitor */
+        #ar-container {
+            position: fixed; bottom: 15px; right: 15px; 
+            width: 180px; height: 135px; 
+            border-radius: 0.5rem; border: 3px solid #334155; 
+            z-index: 130; background: #000; overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.8);
+            display: none;
+        }
+        #ar-container.active { display: block; }
+        
+        #video-feed, #tracking-canvas {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
+            transform: scaleX(-1);
+        }
+        #tracking-canvas { z-index: 2; pointer-events: none; }
+
+        /* AR Cursor */
+        #hand-cursor {
+            position: fixed; width: 70px; height: 70px; transform: translate(-50%, -50%); 
+            display: none; z-index: 9999; pointer-events: none;
+            filter: drop-shadow(0 0 8px var(--secondary)); transition: transform 0.1s;
+        }
+        #hand-cursor.pinching { transform: translate(-50%, -50%) scale(0.7); }
+        
+        .selection-ring {
+            fill: none; stroke: var(--secondary); stroke-width: 6;
+            stroke-dasharray: 283; stroke-dashoffset: 283;
+            transform: rotate(-90deg); transform-origin: center;
+            transition: stroke-dashoffset 0.1s linear;
+        }
+
+        /* Responsive Answer Cards (Fixed CSS for Classic Sizing) */
+        .answer-card {
+            transition: all 0.2s ease; cursor: pointer; 
+            background: rgba(30, 41, 59, 0.9); border: 2px solid rgba(255,255,255,0.1);
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden; padding: 12px 16px; width: 100%;
+            border-radius: 0.75rem; min-height: 70px; max-height: 90px;
+        }
+        .answer-text {
+            width: 100%; text-align: center; font-weight: 800; font-size: 1.1rem;
+            line-height: 1.2; pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        .ar-hovering { 
+            transform: translateY(-2px) scale(1.02); border-color: var(--secondary) !important; 
+            background: rgba(6, 182, 212, 0.25) !important;
+            box-shadow: 0 5px 15px rgba(6, 182, 212, 0.3); z-index: 10;
+        }
+
+        .swipe-hint {
+            position: absolute; bottom: 10%; left: 50%; transform: translateX(-50%);
+            z-index: 50; pointer-events: none;
+        }
+
+        #feedback-overlay {
+            position: fixed; inset: 0; z-index: 200; display: none; 
+            align-items: center; justify-content: center; background: rgba(0,0,0,0.6); backdrop-filter: blur(3px);
+        }
+
+        /* Image Zoom Modal (Pro Feature) */
+        #image-modal { display: none; position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,0.9); align-items: center; justify-content: center; backdrop-filter: blur(5px); }
+        #image-modal.active { display: flex; animation: fadeIn 0.2s; }
+        #image-modal img { max-width: 90vw; max-height: 90vh; border-radius: 1rem; border: 2px solid var(--secondary); box-shadow: 0 0 30px rgba(6, 182, 212, 0.5); }
+
+        /* Classic Layout Container - Fixed Resolution */
+        .game-layout-container {
+            display: flex; width: 100%; height: 100%; padding: 12px; gap: 12px;
+            max-width: 1366px; max-height: 768px; margin: auto; box-sizing: border-box;
+        }
+
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+    <!-- Environment Elements -->
+    <canvas id="three-canvas"></canvas>
+    <video id="video-input" style="display:none" playsinline muted></video>
+    
+    <div id="ar-container">
+        <video id="video-feed" playsinline muted></video>
+        <canvas id="tracking-canvas" width="640" height="480"></canvas>
+    </div>
+
+    <div id="hand-cursor">
+        <svg viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="45" fill="rgba(255, 255, 255, 0.1)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+            <circle cx="50" cy="50" r="45" class="selection-ring" id="progress-circle"/>
+            <circle cx="50" cy="50" r="6" fill="white"/>
+        </svg>
+    </div>
+
+    <!-- Pro Overlays -->
+    <div id="turn-overlay" class="hidden absolute inset-0 bg-slate-900/95 z-[120] flex-col items-center justify-center transition-colors duration-500">
+        <div id="turn-avatar" class="text-7xl mb-4 animate-bounce"></div>
+        <h2 id="turn-name" class="text-4xl font-black text-white tracking-widest mb-2 neon-text text-center"></h2>
+        <p id="turn-status" class="text-cyan-400 text-xl font-bold tracking-widest uppercase mb-8 text-center px-4">PLEASE SHOW YOUR HAND TO CAMERA</p>
+        <div id="turn-countdown" class="text-8xl font-black text-yellow-400 text-center">...</div>
+    </div>
+
+    <div id="pause-overlay" class="hidden absolute inset-0 bg-black/80 backdrop-blur-md z-[150] flex-col items-center justify-center">
+        <h1 class="text-7xl font-black text-white tracking-widest neon-text mb-4">PAUSED</h1>
+        <p class="text-slate-300 mb-8 tracking-widest uppercase">Time and Physics are frozen</p>
+        <button id="resume-btn" onclick="togglePause()" class="ar-target bg-green-500 text-slate-900 px-10 py-5 rounded-xl text-2xl font-black hover:scale-105 transition shadow-[0_0_20px_rgba(16,185,129,0.5)]"><i class="fas fa-play mr-2"></i> RESUME</button>
+    </div>
+
+    <!-- Image Enlarge Modal -->
+    <div id="image-modal" onclick="closeImageModal()">
+        <img id="image-modal-img" src="">
+        <div class="absolute top-4 right-4 text-white text-3xl cursor-pointer"><i class="fas fa-times"></i></div>
+    </div>
+
+    <!-- 1. HOME SCREEN -->
+    <section id="screen-home" class="screen active justify-center items-center">
+        <div class="glass p-10 text-center max-w-md w-full flex flex-col items-center relative overflow-hidden">
+            <i class="fas fa-bolt text-6xl text-cyan-400 mb-6 drop-shadow-[0_0_15px_rgba(6,182,212,0.8)]"></i>
+            <h1 class="text-4xl font-black mb-1 uppercase neon-text">AR STRIKE</h1>
+            <p class="text-cyan-200 mb-8 tracking-widest text-xs">PRO CLASSIC EDITION</p>
+            <div class="flex flex-col gap-4 w-full">
+                <button onclick="nav('players')" class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white py-4 rounded-xl text-xl font-bold hover:scale-105 transition shadow-[0_0_20px_rgba(139,92,246,0.5)]">PLAY NOW</button>
+                <button onclick="nav('mgmt')" class="border-2 border-slate-600 text-slate-300 py-3 rounded-xl font-bold hover:bg-slate-800 transition">SETTINGS / EXCEL</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- 2. PLAYER SETUP -->
+    <section id="screen-players" class="screen">
+        <div class="glass flex-1 flex flex-col p-6 max-w-2xl mx-auto w-full my-10 min-h-0">
+            <div class="flex justify-between items-center mb-6 border-b border-slate-700 pb-4">
+                <button onclick="nav('home')" class="text-slate-400 text-xl hover:text-white transition"><i class="fas fa-arrow-left"></i></button>
+                <h2 class="text-2xl font-black tracking-wider text-cyan-400">ADD BOWLERS</h2>
+                <div class="w-6"></div>
+            </div>
+            <div id="player-inputs" class="flex-1 overflow-y-auto space-y-3 px-2 min-h-0"></div>
+            <div class="mt-6 flex flex-col gap-3 shrink-0">
+                <button onclick="addPlayerField()" class="py-3 border-2 border-dashed border-slate-600 text-slate-300 hover:bg-slate-800 rounded-xl font-bold transition">+ ADD PLAYER</button>
+                <button onclick="startGame()" class="py-4 bg-cyan-500 text-slate-900 rounded-xl font-black text-xl shadow-[0_0_15px_rgba(6,182,212,0.6)] hover:brightness-110 transition">ENTER ARENA</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. MANAGEMENT (Split Screen Layout) -->
+    <section id="screen-mgmt" class="screen">
+        <div class="glass flex flex-col p-6 max-w-6xl w-[95%] h-[90vh] mx-auto my-auto overflow-hidden">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-4 mb-4 shrink-0">
+                <h2 class="text-2xl font-black text-purple-400 uppercase">Game Settings</h2>
+                <button onclick="nav('home')" class="text-slate-400 text-2xl hover:text-white"><i class="fas fa-times"></i></button>
+            </div>
+            
+            <!-- Split Screen Container -->
+            <div class="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 overflow-hidden">
+                
+                <!-- LEFT SIDE: Question Bank List -->
+                <div class="flex-1 flex flex-col bg-slate-800/50 rounded-2xl p-4 border border-slate-700 min-h-0 w-full lg:w-1/2">
+                    <div class="flex justify-between items-center mb-4 shrink-0">
+                        <h3 class="text-lg font-bold text-cyan-400"><i class="fas fa-database mr-2"></i>Question Bank</h3>
+                        <div class="flex gap-2">
+                            <button onclick="exportExcel()" class="bg-blue-600/20 text-blue-400 px-3 py-1.5 rounded text-xs font-bold border border-blue-600 hover:bg-blue-600/40"><i class="fas fa-download"></i> EXPORT</button>
+                            <button onclick="document.getElementById('excel-input').click()" class="bg-green-600/20 text-green-400 px-3 py-1.5 rounded text-xs font-bold border border-green-600 hover:bg-green-600/40"><i class="fas fa-upload"></i> IMPORT</button>
+                            <button id="btn-clear-all" onclick="confirmClearAll()" class="bg-rose-600/20 text-rose-400 px-3 py-1.5 rounded text-xs font-bold border border-rose-600 hover:bg-rose-600/40"><i class="fas fa-trash-alt"></i> CLEAR</button>
+                            <input type="file" id="excel-input" class="hidden" accept=".xlsx, .xls">
+                        </div>
+                    </div>
+                    
+                    <div id="mgmt-q-list" class="flex-1 overflow-y-auto space-y-2 pr-2 bg-black/20 p-2 rounded-lg border border-slate-700/50"></div>
+                </div>
+
+                <!-- RIGHT SIDE: Editor and Scoring/Time Settings -->
+                <div class="w-full lg:w-1/2 shrink-0 flex flex-col gap-5 overflow-y-auto pr-2 custom-scrollbar">
+                    
+                    <!-- Question Editor -->
+                    <div class="bg-slate-800/80 p-5 rounded-2xl border border-slate-600 shrink-0 shadow-lg">
+                        <h3 class="font-bold text-slate-200 mb-4 uppercase text-xs tracking-widest border-b border-slate-700 pb-3 flex items-center"><i class="fas fa-pen mr-2 text-yellow-500 text-base"></i> Add / Edit Question</h3>
+                        
+                        <div id="edit-badge" class="hidden text-yellow-400 text-[10px] font-black uppercase mb-2"><i class="fas fa-pen mr-1"></i> Editing Mode</div>
+                        <div class="grid grid-cols-1 gap-3">
+                            <input id="new-q" placeholder="Enter Question..." class="w-full bg-slate-900 border border-slate-600 p-2.5 rounded-lg text-sm text-white outline-none focus:border-cyan-500 transition-colors">
+                            
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <input id="new-a" placeholder="Correct Answer..." class="w-full bg-slate-900 border border-slate-600 p-2.5 rounded-lg text-sm text-white outline-none border-l-4 border-l-green-500 focus:border-green-500 transition-colors">
+                                <input id="new-w" placeholder="Distractors (comma separated)..." class="w-full bg-slate-900 border border-slate-600 p-2.5 rounded-lg text-sm text-white outline-none focus:border-cyan-500 transition-colors">
+                            </div>
+                            
+                            <div class="flex gap-2">
+                                <input id="new-img" placeholder="Image URL (Optional)" class="flex-1 bg-slate-900 border border-slate-600 p-2.5 rounded-lg text-sm text-white outline-none focus:border-cyan-500 transition-colors">
+                                <button onclick="document.getElementById('img-upload').click()" class="bg-slate-700 px-4 py-2.5 rounded-lg hover:bg-slate-600 transition"><i class="fas fa-image"></i></button>
+                                <input type="file" id="img-upload" class="hidden" accept="image/*" onchange="handleImageUpload(event)">
+                            </div>
+                            
+                            <div class="flex gap-2 mt-2">
+                                <button id="action-q-btn" onclick="addQuestion()" class="flex-1 bg-slate-700 text-white py-3 rounded-lg font-bold hover:bg-slate-600 text-sm transition shadow-md">ADD QUESTION</button>
+                                <button id="cancel-q-btn" onclick="cancelEdit()" class="hidden bg-slate-600 text-white px-5 py-3 rounded-lg font-bold hover:bg-slate-500 transition shadow-md"><i class="fas fa-times"></i></button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Game Config Config -->
+                    <div class="bg-slate-800/50 p-5 rounded-2xl border border-slate-600 shadow-lg shrink-0">
+                        <h3 class="font-bold text-slate-200 mb-4 uppercase text-xs tracking-widest border-b border-slate-700 pb-3 flex items-center"><i class="fas fa-cog mr-2 text-cyan-500 text-base"></i> Scoring & Time</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div><label class="text-xs text-slate-400 font-bold block mb-1">Base Points</label><input type="number" id="cfg-points" value="10" class="w-full bg-slate-900 border border-slate-600 p-2.5 rounded-lg text-white outline-none text-sm focus:border-cyan-500 transition-colors"></div>
+                            <div><label class="text-xs text-slate-400 font-bold block mb-1">Strike Bonus</label><input type="number" id="cfg-strike" value="25" class="w-full bg-slate-900 border border-slate-600 p-2.5 rounded-lg text-white outline-none text-sm focus:border-cyan-500 transition-colors"></div>
+                            <div><label class="text-xs text-rose-400 font-bold block mb-1">Point Deduction (Wrong)</label><input type="number" id="cfg-deduction" value="0" class="w-full bg-slate-900 border border-rose-900/50 p-2.5 rounded-lg text-white outline-none text-sm focus:border-rose-500 transition-colors"></div>
+                            <div><label class="text-xs text-yellow-400 font-bold block mb-1">Game Time (Mins)</label><input type="number" id="cfg-time" value="5" class="w-full bg-slate-900 border border-yellow-700/50 p-2.5 rounded-lg text-white outline-none text-sm focus:border-yellow-500 transition-colors"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 4. GAME ARENA (Classic Resolution Constraints) -->
+    <section id="screen-game" class="screen">
+        <div class="game-layout-container">
+            
+            <!-- Main Game Area -->
+            <div class="flex-1 flex flex-col min-w-0 h-full">
+                
+                <!-- Status Header (Neat Boxed Borders & Auto-Wrap) -->
+                <div class="glass p-3 sm:p-4 mb-3 flex flex-wrap justify-between items-center shrink-0 border border-slate-700/50 shadow-lg rounded-2xl gap-3">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div id="player-avatar" class="w-12 h-12 shrink-0 rounded-xl bg-slate-800 flex items-center justify-center text-2xl border-2 border-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.3)]">👤</div>
+                        <div class="flex flex-col justify-center min-w-0">
+                            <span class="text-[9px] text-cyan-400 font-black uppercase tracking-widest leading-tight">Currently Bowling</span>
+                            <h2 id="game-player-name" class="text-lg font-black text-white leading-tight truncate max-w-[150px] sm:max-w-[200px]">---</h2>
+                        </div>
+                    </div>
+                    
+                    <!-- Neat Box for Time and Controls -->
+                    <div class="flex items-center gap-3 bg-slate-900/60 p-2 rounded-xl border border-slate-700/50 shadow-inner ml-auto">
+                        <div class="flex flex-col items-center justify-center px-3 sm:px-4 border-r-2 border-slate-700/80">
+                            <span class="text-[9px] text-yellow-400 font-black uppercase tracking-widest leading-tight">Time</span>
+                            <div id="game-timer-display" class="text-xl font-black text-white font-mono leading-tight tracking-wider">00:00</div>
+                        </div>
+                        <div class="flex gap-2 pr-1">
+                            <button id="pause-btn" onclick="togglePause()" class="ar-target px-3 py-2 bg-slate-700 border border-slate-500 hover:bg-slate-600 transition rounded-lg text-xs font-bold shadow-md" title="Pause"><i class="fas fa-pause"></i></button>
+                            <button onclick="endGame('ENDED EARLY')" class="ar-target px-3 py-2 bg-rose-600 border border-rose-500 hover:bg-rose-500 transition rounded-lg text-xs font-bold text-white shadow-md" title="End Game"><i class="fas fa-stop"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stage Area: Completely transparent background! -->
+                <div id="stage-area" class="flex-1 flex flex-col relative min-h-0">
+                    
+                    <!-- QUIZ PHASE (Has .glass to keep it blurred only during quiz!) -->
+                    <div id="quiz-container" class="glass overflow-hidden absolute inset-0 flex flex-col p-4 items-center justify-center gap-4 transition-opacity duration-300">
+                        <div class="flex-1 flex flex-col md:flex-row items-center justify-center w-full max-w-5xl gap-6 min-h-0 overflow-y-auto pt-6">
+                            
+                            <!-- Image Wrap (Pro Feature) -->
+                            <div id="q-image-wrap" class="hidden shrink-0 w-32 md:w-40 flex-col items-center justify-center bg-slate-800/50 rounded-lg p-2 border border-slate-700 shadow-lg">
+                                <img id="q-image-display" src="" class="max-h-full max-w-full object-contain rounded-xl cursor-zoom-in" alt="Question Media">
+                            </div>
+
+                            <div class="flex-1 flex items-center justify-center min-h-0 py-2">
+                                <h3 id="q-text" class="font-black text-white text-center text-xl md:text-2xl lg:text-3xl max-w-full px-4 leading-snug tracking-wide" style="text-shadow: 0 2px 10px rgba(0,0,0,0.5);">...</h3>
+                            </div>
+                        </div>
+
+                        <div id="answers-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-3xl mx-auto px-4 pb-4 shrink-0"></div>
+                    </div>
+
+                    <!-- BOWLING PHASE (Transparent background to show 3D Canvas!) -->
+                    <div id="bowling-container" class="hidden absolute inset-0 transition-opacity duration-300 border-2 border-primary shadow-[inset_0_0_30px_rgba(139,92,246,0.2)] rounded-2xl pointer-events-none">
+                        <div class="swipe-hint">
+                            <div class="bg-black/70 backdrop-blur-md px-6 py-4 rounded-xl border border-white/20 text-center">
+                                <i class="fas fa-hand-pointer text-3xl text-accent mb-2"></i>
+                                <h2 class="text-lg font-black text-white tracking-widest uppercase mb-1" id="bowling-instruction">PINCH TO MOVE</h2>
+                                <p class="text-yellow-400 font-bold text-xl" id="bowling-countdown">HOLD FOR 3 SECS</p>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Sidebar (Rankings - Neat Borders & Padding) -->
+            <aside class="w-64 lg:w-72 flex flex-col rounded-2xl p-4 shrink-0 h-full overflow-hidden glass border border-slate-700/50 shadow-lg">
+                <h3 class="text-sm font-black text-white tracking-widest mb-3 border-b border-slate-600 pb-3 flex items-center shrink-0"><i class="fas fa-trophy text-yellow-500 mr-2 text-lg"></i> RANKINGS</h3>
+                <div class="flex-1 relative overflow-hidden">
+                    <div id="game-leaderboard" class="absolute inset-0 overflow-y-auto space-y-3 pr-2"></div>
+                </div>
+            </aside>
+
+        </div>
+    </section>
+
+    <!-- 5. RESULTS -->
+    <section id="screen-results" class="screen justify-center items-center bg-bg-dark z-[300]">
+        <div class="glass p-10 max-w-lg w-full text-center flex flex-col neon-border">
+            <i class="fas fa-flag-checkered text-5xl text-yellow-400 mb-4 drop-shadow-[0_0_20px_rgba(250,204,21,0.6)]"></i>
+            <h2 id="result-reason" class="text-cyan-400 font-black tracking-widest mb-2 uppercase">GAME OVER</h2>
+            <h1 class="text-4xl font-black mb-8 text-white">STANDINGS</h1>
+            <div id="final-stats" class="space-y-3 mb-8 flex-1 overflow-y-auto pr-2"></div>
+            <button onclick="location.reload()" class="bg-cyan-500 text-slate-900 py-4 rounded-xl font-black text-xl hover:scale-105 transition shadow-[0_0_15px_rgba(6,182,212,0.4)]">PLAY AGAIN</button>
+        </div>
+    </section>
+
+    <!-- Pro Feedback Overlay -->
+    <div id="feedback-overlay">
+        <div class="text-center transform scale-0 transition-transform duration-300" id="feedback-content">
+            <h1 class="text-6xl font-black italic text-white tracking-tighter" id="feedback-title" style="-webkit-text-stroke: 2px var(--secondary);">STRIKE!</h1>
+            <p class="text-3xl font-bold drop-shadow-lg" id="feedback-subtitle">+25 PTS</p>
+        </div>
+    </div>
+
+    <script>
+        // --- PRO DATA & STATE ---
+        const AVATARS = ['😎', '🤖', '👾', '🚀', '🔥', '🎯', '👻', '🦊'];
+        let state = {
+            questions: [],
+            players: [],
+            config: { pointsBase: 10, pointsStrike: 25, pointsDeduction: 0, hoverDelay: 1000, timeLimit: 5 }, 
+            game: { active: false, phase: 'setup', qCycle: [], playerQueue: [], currentPlayer: null, isChecking: false, timerInterval: null, isPaused: false, selectedAnswer: null },
+            ar: { hoverEl: null, pinchStart: 0, isActive: false, handDetected: false },
+            mgmt: { editingId: null }
+        };
+
+        // --- PRO CUSTOM ALERTS & MODALS ---
+        function customAlert(msg) {
+            const ov = document.createElement('div');
+            ov.className = 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm transition-opacity';
+            ov.innerHTML = `
+                <div class="bg-slate-900 border-2 border-cyan-500 p-8 rounded-2xl text-center max-w-sm w-[90%] transform scale-0 transition-transform duration-300 shadow-[0_0_30px_rgba(6,182,212,0.4)]">
+                    <i class="fas fa-exclamation-circle text-5xl text-rose-500 mb-4"></i>
+                    <p class="text-white text-lg font-bold mb-6">${msg}</p>
+                    <button class="bg-cyan-500 text-slate-900 px-6 py-3 rounded-xl font-bold w-full hover:brightness-110 transition">OK, GOT IT</button>
+                </div>
+            `;
+            document.body.appendChild(ov);
+            const box = ov.querySelector('div');
+            setTimeout(() => box.classList.remove('scale-0'), 10);
+            ov.querySelector('button').onclick = () => {
+                box.classList.add('scale-0');
+                setTimeout(() => ov.remove(), 300);
+            };
+        }
+
+        function openImageModal(src) {
+            document.getElementById('image-modal-img').src = src;
+            document.getElementById('image-modal').classList.add('active');
+        }
+        function closeImageModal() { document.getElementById('image-modal').classList.remove('active'); }
+
+        // --- PRO LOCAL STORAGE ---
+        function saveQuestions() { localStorage.setItem('arStrikeQuestions', JSON.stringify(state.questions)); }
+        function loadQuestions() {
+            try {
+                const saved = localStorage.getItem('arStrikeQuestions');
+                if (saved) { const parsed = JSON.parse(saved); if (parsed && parsed.length > 0) state.questions = parsed; }
+            } catch (e) { console.error("Could not load questions", e); }
+        }
+        loadQuestions();
+
+        // --- NAVIGATION ---
+        function nav(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(`screen-${id}`).classList.add('active');
+            if (id === 'game') { 
+                document.getElementById('three-canvas').classList.add('active');
+                document.getElementById('ar-container').classList.add('active'); 
+            } else { 
+                stopAR(); 
+                document.getElementById('three-canvas').classList.remove('active'); 
+                document.getElementById('ar-container').classList.remove('active');
+            }
+            if (id === 'mgmt') renderMgmtQuestions();
+        }
+
+        function togglePause() {
+            if(!state.game.active) return;
+            state.game.isPaused = !state.game.isPaused;
+            document.getElementById('pause-overlay').classList.toggle('hidden', !state.game.isPaused);
+            document.getElementById('pause-overlay').classList.toggle('flex', state.game.isPaused);
+        }
+
+        // --- PRO QUESTION MANAGEMENT ---
+        function renderMgmtQuestions() {
+            const list = document.getElementById('mgmt-q-list'); list.innerHTML = '';
+            state.questions.forEach((q, idx) => {
+                const isEditing = state.mgmt.editingId === q.id;
+                list.innerHTML += `
+                <div class="bg-slate-900 p-3 rounded-xl border ${isEditing ? 'border-yellow-500 bg-slate-800' : 'border-slate-700'} flex justify-between items-center transition-colors">
+                    <div class="flex gap-3 items-center overflow-hidden min-w-0 flex-1">
+                        ${q.image ? `<img src="${q.image}" class="w-10 h-10 object-cover rounded border border-slate-600 shrink-0">` : `<div class="w-10 h-10 bg-slate-800 rounded border border-slate-700 shrink-0 flex items-center justify-center text-slate-600"><i class="fas fa-image"></i></div>`}
+                        <div class="min-w-0 flex-1">
+                            <p class="text-white font-bold text-sm truncate w-full">${idx+1}. ${q.text}</p>
+                            <p class="text-green-400 text-xs truncate w-full">✓ ${q.correct} | ✗ ${q.others.join(', ')}</p>
+                        </div>
+                    </div>
+                    <div class="flex gap-1 md:gap-2 shrink-0 ml-2">
+                        <button onclick="editQ(${q.id})" class="text-slate-400 hover:text-yellow-400 p-2"><i class="fas fa-pen"></i></button>
+                        <button onclick="deleteQ(${q.id})" class="text-slate-500 hover:text-rose-500 p-2"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>`;
+            });
+        }
+
+        function handleImageUpload(event) {
+            const file = event.target.files[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => { document.getElementById('new-img').value = e.target.result; };
+            reader.readAsDataURL(file);
+        }
+
+        function editQ(id) {
+            const q = state.questions.find(x => x.id === id); if(!q) return;
+            state.mgmt.editingId = id;
+            document.getElementById('new-q').value = q.text; document.getElementById('new-a').value = q.correct;
+            document.getElementById('new-w').value = q.others.join(', '); document.getElementById('new-img').value = q.image || "";
+            document.getElementById('edit-badge').classList.remove('hidden'); document.getElementById('cancel-q-btn').classList.remove('hidden');
+            const btn = document.getElementById('action-q-btn');
+            btn.innerText = "UPDATE QUESTION"; btn.className = "flex-[4] bg-yellow-600 text-white py-2 rounded font-bold hover:bg-yellow-500 transition text-sm";
+            btn.onclick = saveEdit; renderMgmtQuestions(); 
+        }
+
+        function saveEdit() {
+            const id = state.mgmt.editingId; const q = state.questions.find(x => x.id === id); if(!q) return cancelEdit();
+            const text = document.getElementById('new-q').value, correct = document.getElementById('new-a').value;
+            if(!text || !correct) return;
+            q.text = text; q.correct = correct;
+            q.others = document.getElementById('new-w').value.split(',').map(s => s.trim()).filter(s => s !== "");
+            if(q.others.length === 0) q.others = ["Wrong Answer"];
+            q.image = document.getElementById('new-img').value;
+            saveQuestions(); cancelEdit();
+        }
+
+        function cancelEdit() {
+            state.mgmt.editingId = null;
+            ['new-q','new-a','new-w','new-img'].forEach(id => document.getElementById(id).value = '');
+            document.getElementById('edit-badge').classList.add('hidden'); document.getElementById('cancel-q-btn').classList.add('hidden');
+            const btn = document.getElementById('action-q-btn');
+            btn.innerText = "ADD QUESTION"; btn.className = "flex-1 bg-slate-700 text-white py-2 rounded font-bold hover:bg-slate-600 transition text-sm";
+            btn.onclick = addQuestion; renderMgmtQuestions();
+        }
+
+        function addQuestion() {
+            const text = document.getElementById('new-q').value, correct = document.getElementById('new-a').value;
+            if(!text || !correct) return;
+            let distractors = document.getElementById('new-w').value.split(',').map(s => s.trim()).filter(s => s !== "");
+            if(distractors.length === 0) distractors = ["Wrong Answer"];
+            state.questions.push({ id: Date.now(), text, correct, others: distractors, image: document.getElementById('new-img').value });
+            saveQuestions(); cancelEdit();
+        }
+
+        function deleteQ(id) { 
+            state.questions = state.questions.filter(q => q.id !== id); saveQuestions();
+            if(state.mgmt.editingId === id) cancelEdit(); else renderMgmtQuestions(); 
+        }
+
+        let clearConfirmTimer = null;
+        function confirmClearAll() {
+            const btn = document.getElementById('btn-clear-all');
+            if (btn.innerText.includes("SURE?")) {
+                state.questions = []; saveQuestions(); renderMgmtQuestions();
+                btn.innerHTML = '<i class="fas fa-trash-alt mr-1"></i> CLEAR';
+                btn.classList.replace('bg-rose-600', 'bg-rose-600/20'); btn.classList.replace('text-white', 'text-rose-400');
+                clearTimeout(clearConfirmTimer);
+            } else {
+                btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i> ARE YOU SURE?';
+                btn.classList.replace('bg-rose-600/20', 'bg-rose-600'); btn.classList.replace('text-rose-400', 'text-white');
+                clearTimeout(clearConfirmTimer);
+                clearConfirmTimer = setTimeout(() => {
+                    btn.innerHTML = '<i class="fas fa-trash-alt mr-1"></i> CLEAR';
+                    btn.classList.replace('bg-rose-600', 'bg-rose-600/20'); btn.classList.replace('text-white', 'text-rose-400');
+                }, 3000);
+            }
+        }
+
+        function exportExcel() {
+            if(state.questions.length === 0) return customAlert("No questions available to export.");
+            const flatData = state.questions.map(q => ({ Question: q.text, Correct: q.correct, Distractors: q.others.join(', '), ImageURL: q.image || '' }));
+            const ws = XLSX.utils.json_to_sheet(flatData); const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Questions"); XLSX.writeFile(wb, "AR_Strike_Questions.xlsx");
+        }
+        
+        document.getElementById('excel-input').onchange = (e) => {
+            const file = e.target.files[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                const workbook = XLSX.read(new Uint8Array(evt.target.result), {type: 'array'});
+                const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                state.questions = json.map((item, idx) => {
+                    const distractorsStr = (item.Distractors || item.distractors || item.WrongOptions || "Wrong").toString();
+                    return { id: Date.now() + idx, text: item.Question || item.question || "Unknown?", correct: item.Correct || item.correct || "Yes", others: distractorsStr.split(',').map(s=>s.trim()).filter(s=>s), image: item.ImageURL || item.image || "" };
+                }); 
+                saveQuestions(); renderMgmtQuestions();
+            }; reader.readAsArrayBuffer(file);
+        };
+
+        function addPlayerField() {
+            const container = document.getElementById('player-inputs');
+            const idx = container.children.length;
+            const div = document.createElement('div');
+            div.className = "flex gap-3 items-center bg-slate-800 p-2 rounded-lg border border-slate-700";
+            div.innerHTML = `
+                <div class="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center text-xl">${AVATARS[idx % AVATARS.length]}</div>
+                <input type="text" placeholder="Name..." class="flex-1 bg-transparent font-bold text-white outline-none player-input" value="Player ${idx + 1}">
+                <button onclick="this.parentElement.remove()" class="text-slate-500 hover:text-rose-500 transition p-2"><i class="fas fa-times"></i></button>`;
+            container.appendChild(div);
+        }
+
+        // --- PRO GAME LOOP LOGIC ---
+        function startGame() {
+            const inps = document.querySelectorAll('.player-input');
+            state.players = Array.from(inps).map((i, idx) => ({ name: i.value || `P${idx+1}`, score: 0, avatar: AVATARS[idx % AVATARS.length] }));
+            if(!state.players.length || !state.questions.length) return customAlert("You need at least one player and one question in the bank to start!");
+            
+            state.config.pointsBase = parseInt(document.getElementById('cfg-points').value) || 10;
+            state.config.pointsStrike = parseInt(document.getElementById('cfg-strike').value) || 25;
+            state.config.pointsDeduction = parseInt(document.getElementById('cfg-deduction').value) || 0;
+            state.config.timeLimit = parseInt(document.getElementById('cfg-time').value) || 5;
+
+            startAR().then(success => {
+                if(!success) { customAlert("Camera Permission Denied! This game requires your camera to play."); return; }
+                state.game.active = true;
+                let timeLeft = state.config.timeLimit * 60;
+                state.game.timerInterval = setInterval(() => {
+                    if(state.game.isPaused) return;
+                    timeLeft--;
+                    if(timeLeft <= 0) endGame("TIME'S UP!");
+                    document.getElementById('game-timer-display').innerText = `${Math.floor(timeLeft/60).toString().padStart(2,'0')}:${(timeLeft%60).toString().padStart(2,'0')}`;
+                }, 1000);
+                nav('game'); initThreeJS(); updateScoreboard(); nextTurn();
+            });
+        }
+
+        function playTurnAnimation(player, callback) {
+            const overlay = document.getElementById('turn-overlay');
+            const countText = document.getElementById('turn-countdown');
+            const statusText = document.getElementById('turn-status');
+            
+            document.getElementById('turn-avatar').innerText = player.avatar;
+            document.getElementById('turn-name').innerText = `${player.name}'S TURN`;
+            overlay.classList.remove('hidden'); overlay.classList.add('flex');
+            
+            countText.innerText = "...";
+            statusText.innerText = "PLEASE SHOW YOUR HAND TO CAMERA";
+            statusText.className = "text-yellow-400 text-xl font-bold tracking-widest uppercase mb-8 text-center px-4 transition-colors animate-pulse";
+            
+            const checkHand = setInterval(() => {
+                if (state.ar.handDetected) {
+                    clearInterval(checkHand);
+                    statusText.innerText = "HAND DETECTED! GET READY!";
+                    statusText.className = "text-green-400 text-xl font-bold tracking-widest uppercase mb-8 text-center px-4 transition-colors";
+                    
+                    let count = 3; countText.innerText = count;
+                    const interval = setInterval(() => {
+                        count--;
+                        if (count > 0) { countText.innerText = count; } 
+                        else if (count === 0) { countText.innerText = "BOWL!"; } 
+                        else { clearInterval(interval); overlay.classList.add('hidden'); overlay.classList.remove('flex'); callback(); }
+                    }, 800);
+                }
+            }, 500);
+        }
+
+        function nextTurn() {
+            if(!state.game.active) return;
+            state.game.phase = 'transition';
+            
+            document.getElementById('quiz-container').classList.remove('hidden');
+            document.getElementById('bowling-container').classList.add('hidden');
+            
+            if(!state.game.playerQueue.length) state.game.playerQueue = [...state.players];
+            state.game.currentPlayer = state.game.playerQueue.shift();
+            if(!state.game.qCycle.length) state.game.qCycle = [...state.questions].sort(() => Math.random() - 0.5);
+            state.game.activeQ = state.game.qCycle.shift();
+
+            document.getElementById('game-player-name').innerText = state.game.currentPlayer.name;
+            document.getElementById('player-avatar').innerText = state.game.currentPlayer.avatar;
+            document.getElementById('q-text').innerText = state.game.activeQ.text;
+            
+            const imgWrap = document.getElementById('q-image-wrap'), imgDisp = document.getElementById('q-image-display');
+            if (state.game.activeQ.image && state.game.activeQ.image.trim() !== '') {
+                imgDisp.src = state.game.activeQ.image; 
+                imgDisp.onclick = () => openImageModal(state.game.activeQ.image);
+                imgWrap.classList.remove('hidden'); imgWrap.classList.add('flex');
+            } else { 
+                imgWrap.classList.add('hidden'); imgWrap.classList.remove('flex'); 
+                imgDisp.src = ''; imgDisp.onclick = null; 
+            }
+
+            const choices = [state.game.activeQ.correct, ...state.game.activeQ.others].sort(() => Math.random() - 0.5);
+            const grid = document.getElementById('answers-grid'); grid.innerHTML = '';
+            choices.forEach(choice => {
+                const btn = document.createElement('div');
+                btn.className = "answer-card ar-target";
+                btn.innerHTML = `<span class="answer-text text-white">${choice}</span>`;
+                btn.onclick = () => selectAnswer(choice, btn); 
+                grid.appendChild(btn);
+            });
+
+            playTurnAnimation(state.game.currentPlayer, () => {
+                state.game.phase = 'quiz';
+                state.game.selectedAnswer = null;
+                state.game.isChecking = false; 
+                resetBowling();
+            });
+        }
+
+        function selectAnswer(val, el) {
+            if(state.game.isChecking || state.game.phase !== 'quiz') return;
+            state.game.isChecking = true;
+            if(val === state.game.activeQ.correct) {
+                el.style.borderColor = '#10b981'; el.style.background = 'rgba(16,185,129,0.4)';
+                state.game.currentPlayer.score += state.config.pointsBase; updateScoreboard();
+                
+                setTimeout(() => {
+                    document.getElementById('quiz-container').classList.add('hidden');
+                    playBowlingReadyAnimation(() => {
+                        startBowlingPhase();
+                    });
+                }, 600);
+            } else {
+                el.style.borderColor = '#ef4444'; el.style.background = 'rgba(239,68,68,0.4)';
+                
+                if (state.config.pointsDeduction > 0) {
+                    state.game.currentPlayer.score -= state.config.pointsDeduction;
+                    updateScoreboard();
+                }
+                
+                showFeedback("MISS!", state.config.pointsDeduction > 0 ? `-${state.config.pointsDeduction} PTS` : "Incorrect Answer", "#ef4444");
+                setTimeout(nextTurn, 1200);
+            }
+        }
+
+        function playBowlingReadyAnimation(callback) {
+            const overlay = document.getElementById('turn-overlay');
+            const countText = document.getElementById('turn-countdown');
+            const statusText = document.getElementById('turn-status');
+            
+            document.getElementById('turn-avatar').innerText = "🎳";
+            document.getElementById('turn-name').innerText = "BOWLING PHASE";
+            overlay.classList.remove('hidden'); overlay.classList.add('flex');
+            
+            countText.innerText = "...";
+            statusText.innerText = "PLEASE SHOW YOUR HAND TO CAMERA";
+            statusText.className = "text-yellow-400 text-xl font-bold tracking-widest uppercase mb-8 text-center px-4 transition-colors animate-pulse";
+            
+            const checkHand = setInterval(() => {
+                if (state.ar.handDetected) {
+                    clearInterval(checkHand);
+                    statusText.innerText = "HAND DETECTED! GET READY!";
+                    statusText.className = "text-green-400 text-xl font-bold tracking-widest uppercase mb-8 text-center px-4 transition-colors";
+                    
+                    let count = 3; countText.innerText = count;
+                    const interval = setInterval(() => {
+                        count--;
+                        if (count > 0) { countText.innerText = count; } 
+                        else if (count === 0) { countText.innerText = "ROLL!"; } 
+                        else { clearInterval(interval); overlay.classList.add('hidden'); overlay.classList.remove('flex'); callback(); }
+                    }, 800);
+                }
+            }, 500);
+        }
+
+        function updateScoreboard() {
+            const b = document.getElementById('game-leaderboard');
+            b.innerHTML = [...state.players].sort((a,b)=>b.score-a.score).map((p, idx) => `
+                <div class="bg-slate-800/80 p-3 rounded-xl border border-slate-700 border-l-4 ${idx===0 && p.score>0 ? 'border-l-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.2)]' : 'border-l-slate-600'} flex justify-between items-center transition-all">
+                    <span class="text-sm font-bold text-white flex items-center gap-3"><span class="text-xl bg-slate-900 w-8 h-8 rounded-lg flex items-center justify-center shadow-inner border border-slate-700/50">${p.avatar}</span> <span class="truncate max-w-[80px]">${p.name}</span></span>
+                    <span class="text-lg font-black text-cyan-400">${p.score}</span>
+                </div>`).join('');
+        }
+
+        function showFeedback(t, s, c) {
+            const ov = document.getElementById('feedback-overlay'), content = document.getElementById('feedback-content');
+            document.getElementById('feedback-title').innerText = t; document.getElementById('feedback-title').style.webkitTextStrokeColor = c;
+            document.getElementById('feedback-subtitle').innerText = s; document.getElementById('feedback-subtitle').style.color = c;
+            ov.style.display = 'flex'; setTimeout(() => content.style.transform = 'scale(1) rotate(-5deg)', 10);
+            setTimeout(() => { content.style.transform = 'scale(0)'; setTimeout(()=>ov.style.display='none',300); }, 1200);
+        }
+
+        function endGame(r) {
+            state.game.active = false; clearInterval(state.game.timerInterval);
+            nav('results'); document.getElementById('result-reason').innerText = r;
+            document.getElementById('final-stats').innerHTML = state.players.sort((a,b)=>b.score-a.score).map((p,i)=>`
+                <div class="flex justify-between items-center p-4 rounded-xl ${i===0 ? 'bg-yellow-500/20 border border-yellow-500/50' : 'bg-slate-800 border border-slate-700'}">
+                    <span class="font-bold text-lg text-white"><span class="text-2xl mr-2">${i===0?'👑':''}</span>${p.avatar} ${p.name}</span>
+                    <span class="font-black text-2xl text-cyan-400">${p.score} PTS</span>
+                </div>`).join('');
+        }
+
+        // --- AR / TRACKING ---
+        let hands=null, camera=null;
+        const tCanvas=document.getElementById('tracking-canvas'), tCtx=tCanvas.getContext('2d');
+        async function startAR() {
+            if(state.ar.isActive) return true;
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({video:true});
+                document.getElementById('video-input').srcObject=stream;
+                document.getElementById('video-feed').srcObject=stream;
+                hands = new Hands({locateFile: (f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+                hands.setOptions({maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7});
+                hands.onResults(onARResults);
+                camera = new Camera(document.getElementById('video-input'), {onFrame: async()=>await hands.send({image:document.getElementById('video-input')}), width:640, height:480});
+                camera.start(); state.ar.isActive=true; return true;
+            } catch(e) { return false; }
+        }
+        function stopAR() { if(camera) camera.stop(); state.ar.isActive=false; document.getElementById('hand-cursor').style.display='none'; }
+
+        function onARResults(results) {
+            tCtx.save(); tCtx.clearRect(0,0,640,480);
+            const cursor=document.getElementById('hand-cursor'), ring=document.getElementById('progress-circle');
+            if(results.multiHandLandmarks && results.multiHandLandmarks.length>0) {
+                state.ar.handDetected=true;
+                const lm = results.multiHandLandmarks[0];
+                
+                // Draw Skeleton Hand Mapping
+                drawConnectors(tCtx, lm, HAND_CONNECTIONS, {color: '#06b6d4', lineWidth: 4});
+                drawLandmarks(tCtx, lm, {color: '#10b981', lineWidth: 2, radius: 3});
+
+                const x=(1-lm[8].x)*window.innerWidth, y=lm[8].y*window.innerHeight;
+                const dist=Math.hypot(lm[4].x-lm[8].x, lm[4].y-lm[8].y);
+                const pinching = dist<0.05;
+
+                cursor.style.display='block'; cursor.style.left=`${x}px`; cursor.style.top=`${y}px`;
+                cursor.classList.toggle('pinching', pinching);
+
+                const target = document.elementFromPoint(x,y)?.closest('.ar-target');
+                if(target && !state.game.isChecking) {
+                    if(state.ar.hoverEl!==target) { state.ar.hoverEl=target; state.ar.pinchStart=0; }
+                    target.classList.add('ar-hovering');
+                    if(pinching) {
+                        if(!state.ar.pinchStart) state.ar.pinchStart=Date.now();
+                        const p = Math.min((Date.now()-state.ar.pinchStart)/state.config.hoverDelay, 1);
+                        ring.style.strokeDashoffset=283-(p*283);
+                        if(p>=1) { target.click(); resetSelection(); }
+                    } else { state.ar.pinchStart=0; ring.style.strokeDashoffset=283; }
+                } else resetSelection();
+
+                if(state.game.phase==='bowling' && !state.game.isPaused && !bowlingState.isRolling) {
+                    const pauseBtn = document.elementFromPoint(x,y)?.closest('#pause-btn');
+                    if (pauseBtn) return; // Allow pinch to pause
+
+                    if(pinching) {
+                        ball.position.x += ((1-lm[9].x-0.5)*6 - ball.position.x)*0.3;
+                        if(!bowlingState.wasPinching) { bowlingState.wasPinching=true; bowlingState.pinchStartTime=Date.now(); }
+                        const held = Date.now()-bowlingState.pinchStartTime;
+                        document.getElementById('bowling-countdown').innerText = Math.ceil((3000-held)/1000)+"...";
+                        if(held>=3000) triggerThrow(0, -1.8);
+                    } else { bowlingState.wasPinching=false; document.getElementById('bowling-countdown').innerText="HOLD FOR 3 SECS"; }
+                }
+            } else { state.ar.handDetected=false; cursor.style.display='none'; resetSelection(); }
+            tCtx.restore();
+        }
+        function resetSelection() { 
+            state.ar.hoverEl=null; state.ar.pinchStart=0; 
+            document.getElementById('progress-circle').style.strokeDashoffset=283;
+            document.querySelectorAll('.ar-target').forEach(t=>t.classList.remove('ar-hovering'));
+        }
+
+        // --- BOWLING PHYSICS (PRO Version Advanced Physics) ---
+        let scene, camera3d, renderer, ball, pins=[];
+        let bowlingState={isRolling:false, wasPinching:false, ballVelocity:new THREE.Vector3()};
+        function initThreeJS() {
+            if(scene) return;
+            scene=new THREE.Scene(); scene.fog=new THREE.FogExp2(0x0d121c, 0.02);
+            camera3d=new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 100);
+            camera3d.position.set(0,3,10); camera3d.lookAt(0,0,-20);
+            renderer=new THREE.WebGLRenderer({canvas:document.getElementById('three-canvas'), alpha:true, antialias:true});
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            const spot=new THREE.SpotLight(0x06b6d4, 1.5); spot.position.set(0,10,5); scene.add(spot);
+            const neonLight = new THREE.PointLight(0x10b981, 2, 30); neonLight.position.set(0, 5, -20); scene.add(neonLight);
+
+            const lane=new THREE.Mesh(new THREE.BoxGeometry(6,0.1,50), new THREE.MeshPhongMaterial({color:0x1e293b, specular: 0x06b6d4, shininess: 100, transparent: true, opacity: 0.9}));
+            lane.position.set(0,-0.05,-15); scene.add(lane);
+            ball=new THREE.Mesh(new THREE.SphereGeometry(0.6,32,32), new THREE.MeshPhongMaterial({color:0x10b981, emissive: 0x064e3b, shininess: 150}));
+            scene.add(ball);
+            
+            const pGeo=new THREE.CylinderGeometry(0.15,0.35,1.6,16); pGeo.translate(0,0.8,0);
+            const pMat=new THREE.MeshPhongMaterial({color:0xffffff, shininess: 80});
+            pins = [];
+            for(let r=0; r<4; r++) {
+                for(let c=0; c<=r; c++) {
+                    const p=new THREE.Mesh(pGeo, pMat); p.position.set((c-r/2)*0.8,0,-20-r*0.8);
+                    scene.add(p); 
+                    pins.push({
+                        mesh:p, 
+                        velocity:new THREE.Vector3(), 
+                        angularVelocity:new THREE.Vector3(),
+                        isFallen:false, 
+                        origPos:p.position.clone()
+                    });
+                }
+            }
+            window.addEventListener('resize', ()=>{camera3d.aspect=window.innerWidth/window.innerHeight; camera3d.updateProjectionMatrix(); renderer.setSize(window.innerWidth,window.innerHeight);});
+            loop();
+        }
+
+        function startBowlingPhase() {
+            state.game.phase='bowling'; 
+            document.getElementById('bowling-container').classList.remove('hidden'); 
+            resetBowling();
+        }
+
+        function resetBowling() {
+            bowlingState.isRolling=false; ball.position.set(0,0.6,8); ball.rotation.set(0,0,0);
+            pins.forEach(p=>{
+                p.mesh.position.copy(p.origPos); 
+                p.mesh.rotation.set(0,0,0); 
+                p.velocity.set(0,0,0); 
+                p.angularVelocity.set(0,0,0);
+                p.isFallen=false;
+            });
+            document.getElementById('bowling-instruction').innerText="PINCH TO MOVE";
+        }
+
+        function triggerThrow(vx,vz) { 
+            if(bowlingState.isRolling) return;
+            bowlingState.isRolling=true; ball.position.y = 0.6;
+            bowlingState.ballVelocity.set(vx,0,vz); 
+        }
+
+        function loop() {
+            requestAnimationFrame(loop);
+            if(!state.game.isPaused && bowlingState.isRolling) {
+                ball.position.add(bowlingState.ballVelocity); ball.rotation.x-=0.2;
+                
+                // Pro Physics: Wall Bounces
+                if(ball.position.x > 2.8 || ball.position.x < -2.8) {
+                    bowlingState.ballVelocity.x *= -0.5; ball.position.x = Math.sign(ball.position.x) * 2.8;
+                }
+
+                // Pro Physics: Advanced Collision
+                pins.forEach((pin, i) => {
+                    if(!pin.isFallen && ball.position.distanceTo(pin.mesh.position) < 1.1) {
+                        pin.isFallen = true;
+                        pin.velocity.set((Math.random() - 0.5)*0.8 + bowlingState.ballVelocity.x*0.5, 0.4, bowlingState.ballVelocity.z*0.6);
+                        pin.angularVelocity.set((Math.random()-0.5)*1.2, 0, (Math.random()-0.5)*1.2);
+                    }
+                    if(pin.isFallen) {
+                        pins.forEach((otherPin, j) => {
+                            if(i !== j && !otherPin.isFallen && pin.mesh.position.distanceTo(otherPin.mesh.position) < 0.7) {
+                                otherPin.isFallen = true;
+                                otherPin.velocity.copy(pin.velocity).multiplyScalar(0.8);
+                                otherPin.angularVelocity.set((Math.random()-0.5)*1.0, 0, (Math.random()-0.5)*1.0);
+                            }
+                        });
+                        pin.mesh.position.add(pin.velocity); 
+                        pin.mesh.rotation.x += pin.angularVelocity.x; 
+                        pin.mesh.rotation.z += pin.angularVelocity.z;
+                        pin.velocity.y -= 0.025; 
+                        if(pin.mesh.position.y < 0) { 
+                            pin.mesh.position.y = 0; 
+                            pin.velocity.y *= -0.3; 
+                            pin.velocity.x *= 0.8; 
+                            pin.velocity.z *= 0.8; 
+                        }
+                    }
+                });
+
+                if(ball.position.z < -40) {
+                    bowlingState.isRolling = false;
+                    evaluateBowling();
+                }
+            }
+            if(renderer) renderer.render(scene, camera3d);
+        }
+
+        function evaluateBowling() {
+            setTimeout(() => {
+                let count = pins.filter(p => p.isFallen || p.mesh.rotation.x > 1.0 || p.mesh.rotation.z > 1.0).length;
+                let title = "NICE BOWL!", pts = count * 2, color = "#06b6d4";
+                if (count >= 10) { title = "STRIKE!!"; pts += state.config.pointsStrike; color = "#10b981"; } 
+                else if (count === 0) { title = "GUTTER BALL"; pts = 0; color = "#ef4444"; }
+                
+                state.game.currentPlayer.score += pts; 
+                updateScoreboard();
+                showFeedback(title, `+${pts} PTS`, color);
+                setTimeout(nextTurn, 1500);
+            }, 500);
+        }
+
+        addPlayerField();
+    </script>
+</body>
+</html>
